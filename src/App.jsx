@@ -352,6 +352,35 @@ export default function F1PitWall() {
     }
   };
 
+  // Silent auto-poll: fetch fresh state every 60s so other people's updates
+  // appear without needing to tap refresh. Pauses when tab isn't visible.
+  useEffect(() => {
+    let timer = null;
+    const tick = async () => {
+      if (document.hidden) return;
+      try {
+        const fresh = await apiLoad();
+        // Only update if something actually changed (cheap check on JSON length)
+        const current = JSON.stringify(stateRef.current);
+        const incoming = JSON.stringify(fresh);
+        if (current !== incoming) {
+          applyFullState(fresh);
+          cacheSave(fresh);
+        }
+      } catch {
+        // silent — we'll try again next tick
+      }
+    };
+    timer = setInterval(tick, 60000);
+    // Also fire an immediate tick when the tab regains visibility
+    const onVis = () => { if (!document.hidden) tick(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, []);
+
   if (loading) return <LoadingScreen />;
 
   const currentSeason = seasons.find(s => s.id === currentSeasonId);
@@ -589,8 +618,7 @@ function Header({ tab, setTab, seasons, currentSeason, onSwitchSeason, onNewSeas
           </div>
         </div>
 
-        <div className="flex gap-1 overflow-x-auto pb-3" style={{ scrollbarWidth: 'none' }}>
-          <style>{`header ::-webkit-scrollbar { display: none; }`}</style>
+        <div className="flex gap-1 pb-3 no-scrollbar overflow-x-auto sm:overflow-x-visible">
           {tabs.map(t => {
             const Icon = t.icon;
             const active = tab === t.id;
@@ -598,7 +626,7 @@ function Header({ tab, setTab, seasons, currentSeason, onSwitchSeason, onNewSeas
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
-                className="relative flex items-center gap-2 px-4 py-2 text-sm font-semibold whitespace-nowrap transition-all"
+                className="relative flex flex-1 sm:flex-initial items-center justify-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2 text-xs sm:text-sm font-semibold whitespace-nowrap transition-colors min-w-0"
                 style={{
                   color: active ? '#fff' : C.textDim,
                   background: active ? C.red : 'rgba(255,255,255,0.04)',
@@ -606,8 +634,9 @@ function Header({ tab, setTab, seasons, currentSeason, onSwitchSeason, onNewSeas
                   letterSpacing: '0.02em',
                 }}
               >
-                <Icon className="w-4 h-4" strokeWidth={2.5} />
-                {t.label}
+                <Icon className="w-4 h-4 flex-shrink-0" strokeWidth={2.5} />
+                <span className="hidden sm:inline">{t.label}</span>
+                <span className="sm:hidden truncate" style={{ fontSize: 10 }}>{t.label.split(' ')[0]}</span>
               </button>
             );
           })}
@@ -818,13 +847,13 @@ function StandingsHeaderRow() {
       className="flex items-center gap-3 px-3 sm:px-5 py-3 text-xs font-bold border-b"
       style={{ color: C.textSubtle, borderColor: C.borderDim, background: C.surfaceDeep, letterSpacing: '0.15em' }}
     >
-      <div style={{ width: 40, flexShrink: 0 }}>POS</div>
+      <div style={{ width: 36, flexShrink: 0 }}>POS</div>
       <div className="flex-1">DRIVER</div>
-      <div className="text-right" style={{ width: 50, flexShrink: 0 }}>W</div>
-      <div className="text-right" style={{ width: 50, flexShrink: 0 }}>POD</div>
-      <div className="text-right" style={{ width: 50, flexShrink: 0 }}>FL</div>
-      <div className="text-right hidden sm:block" style={{ width: 70, flexShrink: 0 }}>RACES</div>
-      <div className="text-right" style={{ width: 70, flexShrink: 0 }}>POINTS</div>
+      <div className="text-right hidden sm:block" style={{ width: 50, flexShrink: 0 }}>W</div>
+      <div className="text-right hidden sm:block" style={{ width: 50, flexShrink: 0 }}>POD</div>
+      <div className="text-right hidden sm:block" style={{ width: 50, flexShrink: 0 }}>FL</div>
+      <div className="text-right hidden md:block" style={{ width: 70, flexShrink: 0 }}>RACES</div>
+      <div className="text-right" style={{ width: 60, flexShrink: 0 }}>PTS</div>
     </div>
   );
 }
@@ -842,35 +871,57 @@ function StandingsRow({ row, pos }) {
   const posColor = pos === 1 ? C.gold : pos === 2 ? C.silver : pos === 3 ? C.bronze : C.textDim;
   return (
     <div
-      className="flex items-center gap-3 px-3 sm:px-5 py-4 border-b transition-colors hover:bg-white/5"
-      style={{ borderColor: '#1a1a1a' }}
+      className="flex items-center gap-3 px-3 sm:px-5 py-3 sm:py-4 border-b transition-colors hover:bg-white/5 anim-fade-in-up"
+      style={{ borderColor: '#1a1a1a', animationDelay: `${Math.min(pos, 10) * 40}ms` }}
     >
       <div
         className="text-xl sm:text-2xl font-black"
-        style={{ width: 40, flexShrink: 0, color: posColor, fontFamily: "'Titillium Web', sans-serif" }}
+        style={{ width: 36, flexShrink: 0, color: posColor, fontFamily: "'Titillium Web', sans-serif" }}
       >
         {pos}
       </div>
       <div className="flex items-center gap-3 flex-1 min-w-0">
         <div style={{ width: 4, height: 32, flexShrink: 0, background: row.driver.color, boxShadow: `0 0 12px ${row.driver.color}` }} />
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="text-base sm:text-lg font-bold truncate" style={{ color: '#fff' }}>{row.driver.name.toUpperCase()}</div>
-          <div className="text-xs" style={{ color: C.textSubtle, fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.1em' }}>
+          {/* Mobile-only inline chip stats */}
+          <div className="flex sm:hidden gap-1.5 mt-1 flex-wrap" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
+            <MiniChip label="W"   value={row.wins}         />
+            <MiniChip label="POD" value={row.podiums}      />
+            <MiniChip label="FL"  value={row.fastestLaps} gold={row.fastestLaps > 0} />
+          </div>
+          <div className="hidden sm:block text-xs" style={{ color: C.textSubtle, fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.1em' }}>
             {row.racePoints} + {row.flPoints} FL
           </div>
         </div>
       </div>
-      <div className="text-right font-bold text-sm sm:text-base" style={{ width: 50, flexShrink: 0, color: '#fff', fontFamily: "'JetBrains Mono', monospace" }}>{row.wins}</div>
-      <div className="text-right font-bold text-sm sm:text-base" style={{ width: 50, flexShrink: 0, color: '#fff', fontFamily: "'JetBrains Mono', monospace" }}>{row.podiums}</div>
-      <div className="text-right font-bold text-sm sm:text-base" style={{ width: 50, flexShrink: 0, fontFamily: "'JetBrains Mono', monospace", color: row.fastestLaps > 0 ? C.gold : '#fff' }}>{row.fastestLaps}</div>
-      <div className="text-right font-bold text-sm hidden sm:block" style={{ width: 70, flexShrink: 0, fontFamily: "'JetBrains Mono', monospace", color: C.textDim }}>{row.starts}</div>
+      <div className="text-right font-bold text-sm sm:text-base hidden sm:block" style={{ width: 50, flexShrink: 0, color: '#fff', fontFamily: "'JetBrains Mono', monospace" }}>{row.wins}</div>
+      <div className="text-right font-bold text-sm sm:text-base hidden sm:block" style={{ width: 50, flexShrink: 0, color: '#fff', fontFamily: "'JetBrains Mono', monospace" }}>{row.podiums}</div>
+      <div className="text-right font-bold text-sm sm:text-base hidden sm:block" style={{ width: 50, flexShrink: 0, fontFamily: "'JetBrains Mono', monospace", color: row.fastestLaps > 0 ? C.gold : '#fff' }}>{row.fastestLaps}</div>
+      <div className="text-right font-bold text-sm hidden md:block" style={{ width: 70, flexShrink: 0, fontFamily: "'JetBrains Mono', monospace", color: C.textDim }}>{row.starts}</div>
       <div
-        className="text-right text-xl sm:text-2xl font-black"
-        style={{ width: 70, flexShrink: 0, fontFamily: "'Titillium Web', sans-serif", color: pos === 1 ? C.gold : '#fff' }}
+        className="text-right text-2xl sm:text-2xl font-black"
+        style={{ width: 60, flexShrink: 0, fontFamily: "'Titillium Web', sans-serif", color: pos === 1 ? C.gold : '#fff' }}
       >
         {row.total}
       </div>
     </div>
+  );
+}
+
+function MiniChip({ label, value, gold }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs font-bold"
+      style={{
+        background: gold ? 'rgba(255,199,0,0.12)' : 'rgba(255,255,255,0.06)',
+        color: gold ? C.gold : C.textDim,
+        letterSpacing: '0.1em',
+      }}
+    >
+      <span style={{ color: gold ? C.gold : C.textSubtle, opacity: 0.7 }}>{label}</span>
+      <span>{value}</span>
+    </span>
   );
 }
 
@@ -1135,66 +1186,116 @@ function LapsView({ laps, driversById, drivers, seasons, currentSeasonId, onDele
       {filtered.length === 0 ? (
         <EmptyState icon={Timer} title="NO LAPS MATCH" subtitle="Try clearing filters or logging a new lap time." />
       ) : (
-        <div style={{ background: C.surface, border: `1px solid ${C.borderDim}` }}>
-          <div
-            className="flex items-center gap-3 px-3 sm:px-5 py-3 text-xs font-bold border-b"
-            style={{ color: C.textSubtle, borderColor: C.borderDim, background: C.surfaceDeep, letterSpacing: '0.15em' }}
-          >
-            <div style={{ width: 70, flexShrink: 0 }}>TRACK</div>
-            <div className="flex-1">DRIVER</div>
-            <div className="hidden sm:block" style={{ width: 100, flexShrink: 0 }}>DATE</div>
-            <div className="text-right" style={{ width: 110, flexShrink: 0 }}>LAP TIME</div>
-            <div style={{ width: 28, flexShrink: 0 }}></div>
+        <>
+          {/* ===== MOBILE: card list ===== */}
+          <div className="space-y-2 sm:hidden">
+            {filtered.map((lap, idx) => {
+              const t = getTrack(lap.trackName);
+              const d = driversById[lap.driverId];
+              const isRecord = trackBests[lap.trackName]?.id === lap.id;
+              return (
+                <div
+                  key={lap.id}
+                  className="flex items-center gap-3 p-3 anim-fade-in-up"
+                  style={{
+                    background: C.surface,
+                    border: `1px solid ${C.borderDim}`,
+                    borderLeft: `3px solid ${d?.color || C.textSubtle}`,
+                    animationDelay: `${Math.min(idx, 12) * 25}ms`,
+                  }}
+                >
+                  <div className="flex items-center gap-1.5 flex-shrink-0" style={{ width: 56 }}>
+                    <span className="text-lg">{t.flag}</span>
+                    <span className="text-xs font-bold" style={{ color: C.textDim }}>{t.short}</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-bold truncate" style={{ color: '#fff' }}>
+                      {d ? d.name.toUpperCase() : <span className="italic" style={{ color: C.textSubtle }}>(deleted)</span>}
+                    </div>
+                    <div className="text-xs truncate" style={{ color: C.textSubtle, fontFamily: "'JetBrains Mono', monospace" }}>
+                      {formatDateDMY(lap.dateStr)}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <div
+                      className="text-base font-bold tabular-nums flex items-center gap-1"
+                      style={{ fontFamily: "'JetBrains Mono', monospace", color: isRecord ? C.gold : '#fff' }}
+                    >
+                      {isRecord && <Flame className="w-3 h-3" style={{ color: C.gold }} />}
+                      {formatTime(lap.timeMs)}
+                    </div>
+                    <button
+                      onClick={() => setModal({ type: 'confirm', message: `Delete this lap time?`, onConfirm: () => onDelete(lap.id) })}
+                      style={{ color: C.red, opacity: 0.5, padding: 4 }}
+                      title="Delete"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
-          {filtered.map(lap => {
-            const t = getTrack(lap.trackName);
-            const d = driversById[lap.driverId];
-            const isRecord = trackBests[lap.trackName]?.id === lap.id;
-            return (
-              <div
-                key={lap.id}
-                className="flex items-center gap-3 px-3 sm:px-5 py-3 border-b"
-                style={{ borderColor: '#1a1a1a' }}
-              >
-                <div className="flex items-center gap-2" style={{ width: 70, flexShrink: 0 }}>
-                  <span>{t.flag}</span>
-                  <span className="text-xs font-bold" style={{ color: C.textDim }}>{t.short}</span>
-                </div>
-                <div className="flex items-center gap-2 flex-1 min-w-0">
-                  {d ? (
-                    <>
-                      <div style={{ width: 4, height: 20, flexShrink: 0, background: d.color }} />
-                      <span className="text-sm font-bold truncate" style={{ color: '#fff' }}>{d.name.toUpperCase()}</span>
-                    </>
-                  ) : (
-                    <span className="text-sm italic" style={{ color: C.textSubtle }}>(deleted)</span>
-                  )}
-                </div>
+
+          {/* ===== DESKTOP / TABLET: table ===== */}
+          <div className="hidden sm:block" style={{ background: C.surface, border: `1px solid ${C.borderDim}` }}>
+            <div
+              className="flex items-center gap-3 px-5 py-3 text-xs font-bold border-b"
+              style={{ color: C.textSubtle, borderColor: C.borderDim, background: C.surfaceDeep, letterSpacing: '0.15em' }}
+            >
+              <div style={{ width: 70, flexShrink: 0 }}>TRACK</div>
+              <div className="flex-1">DRIVER</div>
+              <div style={{ width: 100, flexShrink: 0 }}>DATE</div>
+              <div className="text-right" style={{ width: 110, flexShrink: 0 }}>LAP TIME</div>
+              <div style={{ width: 28, flexShrink: 0 }}></div>
+            </div>
+            {filtered.map((lap, idx) => {
+              const t = getTrack(lap.trackName);
+              const d = driversById[lap.driverId];
+              const isRecord = trackBests[lap.trackName]?.id === lap.id;
+              return (
                 <div
-                  className="hidden sm:block text-xs"
-                  style={{ width: 100, flexShrink: 0, color: C.textDim, fontFamily: "'JetBrains Mono', monospace" }}
+                  key={lap.id}
+                  className="flex items-center gap-3 px-5 py-3 border-b anim-fade-in-up"
+                  style={{ borderColor: '#1a1a1a', animationDelay: `${Math.min(idx, 12) * 25}ms` }}
                 >
-                  {formatDateDMY(lap.dateStr)}
+                  <div className="flex items-center gap-2" style={{ width: 70, flexShrink: 0 }}>
+                    <span>{t.flag}</span>
+                    <span className="text-xs font-bold" style={{ color: C.textDim }}>{t.short}</span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    {d ? (
+                      <>
+                        <div style={{ width: 4, height: 20, flexShrink: 0, background: d.color }} />
+                        <span className="text-sm font-bold truncate" style={{ color: '#fff' }}>{d.name.toUpperCase()}</span>
+                      </>
+                    ) : (
+                      <span className="text-sm italic" style={{ color: C.textSubtle }}>(deleted)</span>
+                    )}
+                  </div>
+                  <div className="text-xs" style={{ width: 100, flexShrink: 0, color: C.textDim, fontFamily: "'JetBrains Mono', monospace" }}>
+                    {formatDateDMY(lap.dateStr)}
+                  </div>
+                  <div
+                    className="text-right text-lg font-bold tabular-nums flex items-center justify-end gap-2"
+                    style={{ width: 110, flexShrink: 0, fontFamily: "'JetBrains Mono', monospace", color: isRecord ? C.gold : '#fff' }}
+                  >
+                    {isRecord && <Flame className="w-3.5 h-3.5" style={{ color: C.gold }} />}
+                    {formatTime(lap.timeMs)}
+                  </div>
+                  <button
+                    onClick={() => setModal({ type: 'confirm', message: `Delete this lap time?`, onConfirm: () => onDelete(lap.id) })}
+                    className="transition-opacity hover:opacity-100"
+                    style={{ width: 28, flexShrink: 0, color: C.red, opacity: 0.5 }}
+                    title="Delete"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
-                <div
-                  className="text-right text-base sm:text-lg font-bold tabular-nums flex items-center justify-end gap-2"
-                  style={{ width: 110, flexShrink: 0, fontFamily: "'JetBrains Mono', monospace", color: isRecord ? C.gold : '#fff' }}
-                >
-                  {isRecord && <Flame className="w-3.5 h-3.5" style={{ color: C.gold }} />}
-                  {formatTime(lap.timeMs)}
-                </div>
-                <button
-                  onClick={() => setModal({ type: 'confirm', message: `Delete this lap time?`, onConfirm: () => onDelete(lap.id) })}
-                  className="transition-opacity hover:opacity-100"
-                  style={{ width: 28, flexShrink: 0, color: C.red, opacity: 0.5 }}
-                  title="Delete"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        </>
       )}
     </div>
   );
@@ -1368,9 +1469,9 @@ function DriverStat({ label, value, highlight }) {
 // ======================================================
 function SectionHeader({ title, subtitle }) {
   return (
-    <div>
+    <div className="anim-fade-in">
       <h2
-        className="text-3xl sm:text-4xl font-black leading-none"
+        className="text-2xl sm:text-3xl md:text-4xl font-black leading-tight"
         style={{ fontFamily: "'Titillium Web', sans-serif", letterSpacing: '-0.02em' }}
       >
         {title.split(' ').map((w, i, arr) => (
@@ -1379,21 +1480,26 @@ function SectionHeader({ title, subtitle }) {
           </span>
         ))}
       </h2>
-      <div className="text-xs font-bold mt-2" style={{ color: C.textSubtle, letterSpacing: '0.25em' }}>{subtitle}</div>
+      <div
+        className="text-xs font-bold mt-2 break-words"
+        style={{ color: C.textSubtle, letterSpacing: '0.2em' }}
+      >
+        {subtitle}
+      </div>
     </div>
   );
 }
 
 function EmptyState({ icon: Icon, title, subtitle, action }) {
   return (
-    <div className="text-center py-16 px-4" style={{ background: C.surface2, border: `1px dashed ${C.borderDim}` }}>
+    <div className="text-center py-12 sm:py-16 px-4 anim-fade-in" style={{ background: C.surface2, border: `1px dashed ${C.borderDim}` }}>
       <Icon className="w-12 h-12 mx-auto mb-4" style={{ color: C.textMuted }} strokeWidth={1.5} />
       <div className="font-black text-lg" style={{ color: C.textDim, fontFamily: "'Titillium Web', sans-serif", letterSpacing: '-0.01em' }}>{title}</div>
-      <div className="text-sm mt-1" style={{ color: C.textSubtle }}>{subtitle}</div>
+      <div className="text-sm mt-1 px-4" style={{ color: C.textSubtle }}>{subtitle}</div>
       {action && (
         <button
           onClick={action.onClick}
-          className="mt-5 px-5 py-2 font-bold text-sm"
+          className="mt-5 px-5 py-2.5 font-bold text-sm"
           style={{ background: C.red, color: '#fff', clipPath: 'polygon(8% 0, 100% 0, 92% 100%, 0 100%)', letterSpacing: '0.15em' }}
         >
           {action.label}
@@ -1434,22 +1540,26 @@ function FAB({ setModal, tab }) {
   }
 
   return (
-    <div className="fixed z-30 flex flex-col items-end gap-2" style={{ bottom: 20, right: 16 }}>
+    <div
+      className="fixed z-30 flex flex-col items-end gap-2"
+      style={{ bottom: 'max(16px, var(--safe-bottom))', right: 12 }}
+    >
       {actions.map((a, i) => (
         <button
           key={i}
           onClick={a.action}
-          className="flex items-center gap-2 font-black text-sm transition-transform hover:scale-105"
+          className="flex items-center gap-2 font-black text-xs sm:text-sm transition-transform hover:scale-105 anim-slide-right"
           style={{
-            padding: '12px 20px',
+            padding: '10px 16px',
             background: a.primary ? C.red : C.surface,
             color: '#fff',
             border: a.primary ? 'none' : `1px solid ${C.border}`,
             boxShadow: a.primary ? '0 0 30px rgba(225,6,0,0.5)' : '0 6px 24px rgba(0,0,0,0.6)',
             letterSpacing: '0.15em',
+            animationDelay: `${i * 60}ms`,
           }}
         >
-          <Plus className="w-5 h-5" strokeWidth={3} />
+          <Plus className="w-4 h-4 sm:w-5 sm:h-5" strokeWidth={3} />
           {a.label}
         </button>
       ))}
@@ -1676,51 +1786,62 @@ function AddRaceModal({ drivers, onClose, onSubmit }) {
             {drivers.map(d => (
               <div
                 key={d.id}
-                className="flex items-center gap-2 px-3 py-2.5 flex-wrap sm:flex-nowrap"
+                className="px-3 py-2.5"
                 style={{ background: C.surfaceDeep, border: `1px solid ${C.borderDim}` }}
               >
-                <div style={{ width: 4, height: 24, flexShrink: 0, background: d.color }} />
-                <div className="font-bold truncate" style={{ minWidth: 70, color: '#fff' }}>{d.name.toUpperCase()}</div>
-                <div className="flex-1" />
-                <input
-                  type="number"
-                  min="1"
-                  max="20"
-                  value={positions[d.id] || ''}
-                  onChange={e => setPos(d.id, e.target.value)}
-                  placeholder="POS"
-                  className="text-center font-bold tabular-nums"
-                  style={{
-                    width: 58, padding: '6px 6px',
-                    background: C.surface, border: `1px solid ${C.border}`,
-                    color: '#fff', fontFamily: "'JetBrains Mono', monospace", outline: 'none',
-                  }}
-                />
-                <input
-                  type="text"
-                  value={times[d.id] || ''}
-                  onChange={e => { setTime(d.id, e.target.value); setErr(''); }}
-                  placeholder="1:20.241"
-                  className="text-center tabular-nums"
-                  style={{
-                    width: 100, padding: '6px 8px',
-                    background: C.surface, border: `1px solid ${C.border}`,
-                    color: C.gold, fontFamily: "'JetBrains Mono', monospace", outline: 'none',
-                  }}
-                />
-                <button
-                  onClick={() => setFlDriverId(flDriverId === d.id ? '' : d.id)}
-                  className="flex items-center gap-1 px-2 py-1.5 text-xs font-bold"
-                  style={{
-                    background: flDriverId === d.id ? C.gold : 'transparent',
-                    color: flDriverId === d.id ? '#000' : C.gold,
-                    border: `1px solid ${C.gold}`,
-                    letterSpacing: '0.15em',
-                  }}
-                  title="Fastest Lap bonus point"
-                >
-                  <Flame className="w-3 h-3" /> FL
-                </button>
+                {/* ===== Header row: color bar + name + FL bonus button ===== */}
+                <div className="flex items-center gap-2">
+                  <div style={{ width: 4, height: 24, flexShrink: 0, background: d.color }} />
+                  <div className="font-bold truncate flex-1" style={{ color: '#fff' }}>{d.name.toUpperCase()}</div>
+                  <button
+                    onClick={() => setFlDriverId(flDriverId === d.id ? '' : d.id)}
+                    className="flex items-center gap-1 px-2 py-1.5 text-xs font-bold flex-shrink-0"
+                    style={{
+                      background: flDriverId === d.id ? C.gold : 'transparent',
+                      color: flDriverId === d.id ? '#000' : C.gold,
+                      border: `1px solid ${C.gold}`,
+                      letterSpacing: '0.15em',
+                    }}
+                    title="Fastest Lap bonus point"
+                  >
+                    <Flame className="w-3 h-3" /> FL
+                  </button>
+                </div>
+                {/* ===== Input row: POS + TIME ===== */}
+                <div className="flex items-center gap-2 mt-2">
+                  <div className="flex items-center gap-2 flex-1">
+                    <div className="text-xs font-bold" style={{ color: C.textSubtle, letterSpacing: '0.15em', width: 28 }}>POS</div>
+                    <input
+                      type="number"
+                      min="1"
+                      max="20"
+                      value={positions[d.id] || ''}
+                      onChange={e => setPos(d.id, e.target.value)}
+                      placeholder="—"
+                      className="text-center font-bold tabular-nums flex-1"
+                      style={{
+                        padding: '8px 10px', maxWidth: 80,
+                        background: C.surface, border: `1px solid ${C.border}`,
+                        color: '#fff', fontFamily: "'JetBrains Mono', monospace", outline: 'none',
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 flex-[2]">
+                    <div className="text-xs font-bold" style={{ color: C.textSubtle, letterSpacing: '0.15em', width: 32 }}>TIME</div>
+                    <input
+                      type="text"
+                      value={times[d.id] || ''}
+                      onChange={e => { setTime(d.id, e.target.value); setErr(''); }}
+                      placeholder="1:20.241"
+                      className="text-center tabular-nums flex-1"
+                      style={{
+                        padding: '8px 10px', minWidth: 0,
+                        background: C.surface, border: `1px solid ${C.border}`,
+                        color: C.gold, fontFamily: "'JetBrains Mono', monospace", outline: 'none',
+                      }}
+                    />
+                  </div>
+                </div>
               </div>
             ))}
           </div>
